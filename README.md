@@ -24,6 +24,11 @@ df.select(
 ).show(10)
 ```
 
+### Data decryption
+With this same sample code above you can read data encrypted with AES256 with KMS, except it expect encrypted data to use specific format:
+[magic byte (value 2 or 3) | encrypted aes256 key | encrypted avro data]
+
+
 ## Build
 
 The tool is designed to be used with Spark >= 2.0.2.
