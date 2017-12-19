@@ -35,7 +35,7 @@ import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.udf
 import org.apache.spark.sql.types.DataType
 
-import scala.collection.mutable.{Map => MutableMap}
+import scala.collection.mutable
 import scala.collection.JavaConverters._
 import scalaz.Memo
 
@@ -66,26 +66,25 @@ class ConfluentSparkAvroUtils(schemaRegistryURLs: String) extends Serializable {
 
   @transient private lazy val deserializer = new KafkaAvroDeserializer(schemaRegistry)
 
-  @transient private lazy val AES_MAGIC_BYTES = Set[Byte](2, 3)
-
   @transient private lazy val awsKms: AWSKMS = new AWSKMSClient()
 
-  @transient private lazy val keyCache = MutableMap[Seq[Byte], Array[Byte]]()
+  @transient private lazy val keyCache = mutable.Map[Seq[Byte], Array[Byte]]()
 
+  val AES_MAGIC_BYTES = Set[Byte](2, 3)
   val HEADER_SIZE = 5
   val AES_ENCRYPTED_KEY_SIZE = 184
 
   def deserializerForSubject(subject: String, version: String): UserDefinedFunction = {
     udf(
       (payload: Array[Byte]) => {
-        val magic_byte: Byte = payload(0)
+        val magicByte: Byte = payload(0)
 
-        var data: Array[Byte] =
-          if (AES_MAGIC_BYTES(magic_byte)) {
+        val data: Array[Byte] =
+          if (AES_MAGIC_BYTES(magicByte)) {
             // Decrypt Key
             val encryptedKey: Array[Byte] = payload.slice(HEADER_SIZE,
                                                           HEADER_SIZE + AES_ENCRYPTED_KEY_SIZE)
-            var plainKeyBytes: Array[Byte] =
+            val plainKeyBytes: Array[Byte] =
               if (keyCache.keySet.contains(encryptedKey))
                 keyCache(encryptedKey)
               else {
@@ -106,7 +105,6 @@ class ConfluentSparkAvroUtils(schemaRegistryURLs: String) extends Serializable {
             val decryptedData: Array[Byte] = cipher.doFinal(
               payload.slice(HEADER_SIZE + AES_ENCRYPTED_KEY_SIZE, payload.size)
             )
-            val zero: Byte = 0
             val data = payload.slice(0, HEADER_SIZE) ++ decryptedData
 
             // hack: magic byte could be only 0 or 1 for confluent lib compatibility
