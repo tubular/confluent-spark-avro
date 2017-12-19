@@ -21,8 +21,13 @@
  */
 package com.databricks.spark.avro
 
+import com.amazonaws.services.kms.model.DecryptRequest
+import com.amazonaws.services.kms.{ AWSKMS, AWSKMSClient }
+import javax.crypto.Cipher
+import javax.crypto.spec.SecretKeySpec
 import io.confluent.kafka.schemaregistry.client.CachedSchemaRegistryClient
 import io.confluent.kafka.serializers.KafkaAvroDeserializer
+import java.nio.ByteBuffer
 import org.apache.avro.Schema
 import org.apache.commons.logging.LogFactory
 import org.apache.spark.sql.catalyst.expressions.GenericRow
@@ -30,6 +35,7 @@ import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.udf
 import org.apache.spark.sql.types.DataType
 
+import scala.collection.mutable
 import scala.collection.JavaConverters._
 import scalaz.Memo
 
@@ -60,12 +66,54 @@ class ConfluentSparkAvroUtils(schemaRegistryURLs: String) extends Serializable {
 
   @transient private lazy val deserializer = new KafkaAvroDeserializer(schemaRegistry)
 
+  @transient private lazy val awsKms: AWSKMS = new AWSKMSClient()
+
+  @transient private lazy val keyCache = mutable.Map[Seq[Byte], Array[Byte]]()
+
+  val AES_MAGIC_BYTES = Set[Byte](2, 3)
+  val HEADER_SIZE = 5
+  val AES_ENCRYPTED_KEY_SIZE = 184
+
   def deserializerForSubject(subject: String, version: String): UserDefinedFunction = {
     udf(
       (payload: Array[Byte]) => {
+        val magicByte: Byte = payload(0)
+
+        val data: Array[Byte] =
+          if (AES_MAGIC_BYTES(magicByte)) {
+            // Decrypt Key
+            val encryptedKey: Array[Byte] = payload.slice(HEADER_SIZE,
+                                                          HEADER_SIZE + AES_ENCRYPTED_KEY_SIZE)
+            val decryptKey = (encryptedKey: Array[Byte]) => {
+              val encryptedKeyBuff: ByteBuffer = ByteBuffer.wrap(encryptedKey)
+              val decryptRequest = new DecryptRequest().withCiphertextBlob(encryptedKeyBuff)
+              val plainKey = awsKms.decrypt(decryptRequest).getPlaintext()
+              val plainKeyData = Array.fill(plainKey.remaining()){plainKey.get}
+              plainKeyData
+            }
+
+            val plainKeyBytes: Array[Byte] = keyCache.getOrElseUpdate(encryptedKey,
+                                                                      decryptKey(encryptedKey))
+
+            // Decrypt Data
+            val cipher = Cipher.getInstance("AES")
+            val keySpec = new SecretKeySpec(plainKeyBytes, "AES")
+            cipher.init(Cipher.DECRYPT_MODE, keySpec)
+            val decryptedData: Array[Byte] = cipher.doFinal(
+              payload.slice(HEADER_SIZE + AES_ENCRYPTED_KEY_SIZE, payload.size)
+            )
+            val data = payload.slice(0, HEADER_SIZE) ++ decryptedData
+
+            // hack: magic byte could be only 0 or 1 for confluent lib compatibility
+            data(0) = 0
+            data
+          } else {
+            payload
+          }
+
         val avroSchema = avroSchemaForSubject(subject, version)
         val dataType = dataTypeForSubject(subject, version)
-        val obj = deserializer.deserialize("", payload, avroSchema)
+        val obj = deserializer.deserialize("", data, avroSchema)
         val toSqlRow = sqlConverter(avroSchema, dataType)
 
         toSqlRow(obj).asInstanceOf[GenericRow]
