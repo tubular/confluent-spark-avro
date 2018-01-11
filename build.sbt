@@ -1,6 +1,6 @@
 name := "confluent-spark-avro"
 
-version := "1.1"
+version := "1.2"
 
 scalaVersion := "2.11.11"
 
@@ -10,7 +10,7 @@ libraryDependencies += "org.apache.spark" % "spark-sql_2.11" % "2.1.1" % "provid
 
 libraryDependencies += "org.apache.spark" % "spark-sql-kafka-0-10_2.11" % "2.1.1" % "provided"
 
-libraryDependencies += "com.amazonaws" % "aws-java-sdk-kms" % "1.10.75.1" % "provided"
+libraryDependencies += "com.amazonaws" % "aws-java-sdk-kms" % "1.10.75.1"
 
 libraryDependencies += "io.confluent" % "kafka-avro-serializer" % "3.2.2"
 
